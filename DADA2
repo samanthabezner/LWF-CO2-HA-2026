@@ -1,0 +1,142 @@
+#This was done on the University of Guelph ABSC Speed Server in RStudio. 
+getRversion()
+
+library(dada2); packageVersion("dada2") #Bioinformatic pipeline package 
+
+library(ggplot2) #Package for making visually appealing plots 
+
+library(stats) #Functions for statistical calculations (ANOVA) and for random number generation 
+
+library(dplyr) #Organization and quality of life for datasets, perform multiple large functions simultaneously  
+
+path <- "/home/samba/faculty/huybendshare/Research/202606_eyesun_whitefish2"
+path
+
+# Get the filenames with relative path and sort to ensure same order of fwd/rev reads 
+fnFs <- sort(list.files(path, pattern="_R1_001.fastq", full.names = TRUE)) 
+fnFs
+fnRs <- sort(list.files(path, pattern="_R2_001.fastq", full.names = TRUE)) 
+fnRs
+
+#Create sample names and check for duplicates
+sample.names <- sapply(strsplit(basename(fnFs), "_S"), `[`, 1)
+sample.names
+
+any(duplicated(sample.names)) #Should be false. 
+
+#-------------------------------------------------------
+
+# Check read quality
+
+#-------------------------------------------------------
+
+#This will pick a random subset of 4 samples to look at read quality
+#note: you can also plot an aggregate of all fastqs instead using aggregate=TRUE
+
+ids <- round(runif(12,1,length(sample.names)))
+ids
+
+pdf("qualityprofiles2.pdf")
+plotQualityProfile(fnFs[ids])
+plotQualityProfile(fnRs[ids])
+dev.off()
+
+
+message ("###### Filtering reads based on QC")
+
+
+# Make filenames for the filtered fastq files
+
+# Place filtered files in filtered subdirectory (folder) so we don’t mess with the raw data 
+
+filtFs <- file.path(getwd(), "filtered", paste0(sample.names, "_F_filt.fastq.gz")) 
+
+filtRs <- file.path(getwd(), "filtered", paste0(sample.names, "_R_filt.fastq.gz")) 
+
+names(filtFs) <- sample.names 
+
+names(filtRs) <- sample.names 
+
+
+out<-filterAndTrim(fnFs, filtFs, fnRs, filtRs,
+                   
+                   truncQ=20, # Enter quality score cut off (truncates after </=2 QC score)
+                   
+                   trimLeft=c(21,19), #(FORWARD, REVERSE) Used to trim the primers from the left side. 
+                   
+                   maxN=0,  #DADA2 automatically sets to zero. 
+                   
+                   maxEE=c(2,2), #(FORWARD, REVERSE), expected errors. Points of lower quality "allowed" to happen before cut off
+                   
+                   rm.phix=TRUE, #Removes the genome of PhiX, a bacteriphage that may skew results
+                   
+                   compress=TRUE, verbose=TRUE, multithread=FALSE)
+
+#We learn that there are 3 samples that are low in reads and poor quality: C1-2 (22), C2-2 (25), C2-3 (26)
+
+write.table(out, file = "reads_filtered.txt", sep="\t", col.names=NA, quote=F)
+
+# Learn the error rates - SLOW !! ----30 mins for each *errF* and *errR* on this run
+
+errF <- learnErrors(filtFs, multithread=TRUE, randomize=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE, randomize=TRUE)
+
+#Plot the error rates and CHECK THE FIT
+# Do not proceed without a good fit (compare to red line)
+
+pdf("err.pdf")
+
+plotErrors(errF, nominalQ=TRUE)
+plotErrors(errR, nominalQ=TRUE)  
+
+dev.off()
+
+# Dereplication combines all identical sequencing reads into "unique sequences" with a corresponding "abundance": the number of reads with that unique sequence. 
+#Dereplication substantially reduces computation time by eliminating redundant comparisons. Basically, if you have 10,000 reads from one type of bacteria, this will bin those reads together for downstream analysis.
+
+derepFs <- derepFastq(filtFs, verbose=TRUE)
+derepRs <- derepFastq(filtRs, verbose=TRUE)
+
+# Name the derep-class objects by the sample names
+
+names(derepFs) <- sample.names
+
+names(derepRs) <- sample.names
+
+# Sample inference, merge paired reads, remove chimeras
+dadaFs <- dada(derepFs, err=errF, multithread=TRUE, pool=FALSE, verbose=TRUE)
+dadaRs <- dada(derepRs, err=errR, multithread=TRUE, pool=FALSE, verbose=TRUE)
+
+# overlap the ends of the forward and reverse reads
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, minOverlap=2, verbose=TRUE)
+
+seqtab <- makeSequenceTable(mergers)
+table(nchar(getSequences(seqtab)))
+
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", verbose=TRUE, multithread=TRUE) #minFoldParentOverAbundance=2
+
+dim(seqtab.nochim)
+sum(seqtab.nochim)/sum(seqtab)
+
+write.table(seqtab.nochim, file="temp_dada2_nochim.txt", sep="\t", col.names=NA, quote=F)
+
+#Sanity check
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(mergers, getN), rowSums(seqtab), rowSums(seqtab.nochim))
+colnames(track) <- c("input", "filtered", "denoised", "merged", "tabled", "nonchim")
+
+rownames(track) <- sample.names
+
+write.table(track, file="readsout.txt", sep="\t", col.names=NA, quote=F)
+
+track
+
+taxa <- assignTaxonomy(as.matrix(seqtab.nochim), "silva_nr99_v138.2_toGenus_trainset.fa.gz", multithread=TRUE)
+taxa <- addSpecies(taxa, "silva_v138.2_assignSpecies.fa.gz") #gets the taxonomy table down to species level. 
+
+taxa.print <- taxa # Removing sequence row names for display only
+rownames(taxa.print) <- NULL
+head(taxa.print) 
+
+write.csv(seqtab.nochim, file = "EFajei2026LWFASV.csv", row.names = TRUE, col.names = TRUE)
+write.csv(taxa, file = "EFajei2026LWFTaxa.csv", row.names = TRUE, col.names = TRUE)
