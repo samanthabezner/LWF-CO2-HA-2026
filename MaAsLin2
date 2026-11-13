@@ -1,0 +1,36 @@
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("Maaslin2", force = TRUE)
+
+library(Maaslin2) 
+
+gutasvtable.m <- read.csv('EFajei2026LWFASV_DFinal_Classified.csv', sep=',', header=TRUE, row.names=1, check.names=F)
+gutsampleinfo <- read.csv('EFajei2026LWFMetadata_DFinal.csv', sep=',', header=TRUE, row.names=1, check.names=F)
+                         
+                         
+gutsampleinfo$Treatment <- factor(gutsampleinfo$Treatment, ordered = FALSE) 
+
+fit_data = Maaslin2(input_data = gutasvtables,  
+                    
+                    input_metadata  = gutsampleinfo,  
+                    
+                    min_prevalence = 0.1,		       # Change to 0.1 to have in 10% of samples 
+                    
+                    normalization     = "CLR",                 # Can also use TSS or others 
+                    
+                    output                = "Maaslin2_output",  
+                    
+                    random_effects = c("Tank"),                   # Change to tank or pen if needed 
+                    
+                    fixed_effects     = c("Treatment"),      # Change to your treatment category 
+                    
+                    reference          = c("CTRL+Unexposed"),    # Change to your control (basline comparison) 
+                    
+                    correction         = "BH",                     # Correct for multiple testing 
+                    
+                    max_significance  = 0.05,                 # Default is higher, so use this to be stricter 
+                    
+                    max_pngs           = 20,                      # Will make 20 pngs in figures folder 
+                    
+                    save_scatter = TRUE) 
